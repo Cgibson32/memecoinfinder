@@ -55,15 +55,15 @@ class CompositeScorer:
 
         # --- GATE 1: Safety check ---
         if not safety_result:
-            ts.rejected = True
-            ts.rejection_reason = "No safety check available"
-            return ts
-
-        safety_score = safety_result.get("safety_score", 0)
-        if safety_score == 0:
-            ts.rejected = True
-            ts.rejection_reason = safety_result.get("rejection_reason", "Failed safety check")
-            return ts
+            # No safety data available (GoPlus didn't return data) — use neutral score
+            safety_score = 50.0
+            logger.debug("No safety data for %s — using neutral score", contract_address[:12])
+        else:
+            safety_score = safety_result.get("safety_score", 0)
+            if safety_score == 0:
+                ts.rejected = True
+                ts.rejection_reason = safety_result.get("rejection_reason", "Failed safety check")
+                return ts
 
         # --- GATE 2: Deployer rejection ---
         if credibility_data and credibility_data.get("deployer_rejected"):

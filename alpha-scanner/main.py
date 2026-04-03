@@ -383,7 +383,9 @@ class AlphaScanner:
             )
 
         # Safety check (async, may be cached)
-        safety = await self.safety_analyzer.check_token(addr, chain) if self.safety_analyzer else None
+        safety = None
+        if self.safety_analyzer:
+            safety = await self.safety_analyzer.check_token(addr, chain)
 
         if safety:
             await self.db.save_safety_check(
@@ -400,6 +402,7 @@ class AlphaScanner:
             )
 
             if safety.safety_score == 0:
+                logger.debug("Token %s rejected by safety gate", addr[:12])
                 return  # Rejected by safety gate
 
         if not metrics:
@@ -460,6 +463,18 @@ class AlphaScanner:
             market_context=self.market_context,
         ) if self.scorer else None
 
+        if score and score.rejected:
+            logger.debug("Token %s rejected: %s", addr[:12], score.rejection_reason)
+        elif score:
+            logger.info(
+                "Scored %s ($%s) on %s: %.0f/100 [vol=%.0f soc=%.0f hold=%.0f safe=%.0f liq=%.0f sm=%.0f narr=%.0f cred=%.0f]",
+                token_data.get("token_symbol", "???"), addr[:8], chain,
+                score.composite_score,
+                score.volume_score, score.social_score, score.holder_score,
+                score.safety_score, score.liquidity_score, score.smart_money_score,
+                score.narrative_score, score.credibility_score,
+            )
+
         if score and not score.rejected and self.bot:
             await self.bot.send_alert(
                 score=score,
@@ -507,10 +522,7 @@ class AlphaScanner:
             return
 
         safety_row = await self.db.get_latest_safety(token_id)
-
-        # Only re-score if we have safety data
-        if not safety_row:
-            return
+        # Safety data is optional — scorer handles None with neutral score
 
         metrics = MetricsSnapshot(
             contract_address=addr,
