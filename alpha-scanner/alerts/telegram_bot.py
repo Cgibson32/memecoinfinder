@@ -32,6 +32,8 @@ class TelegramAlertBot:
         self._bot: Bot | None = None
         self._market_context: MarketContext | None = None
         self._start_time: float = 0.0
+        # Set by main.py for on-demand lookups
+        self.scanner: Any = None
 
     async def initialize(self) -> None:
         """Set up the bot and register command handlers."""
@@ -60,6 +62,8 @@ class TelegramAlertBot:
             ("stats", self._cmd_stats),
             ("market", self._cmd_market),
             ("dangers", self._cmd_dangers),
+            ("search", self._cmd_search),
+            ("scan", self._cmd_search),
         ]
         for name, handler in handlers:
             self._app.add_handler(CommandHandler(name, handler))
@@ -216,9 +220,10 @@ class TelegramAlertBot:
             "🚀 *AlphaScanner Bot*\n\n"
             "I find high-potential meme coins before they pump.\n\n"
             "Commands:\n"
+            "/search <query> - Search & score ANY coin (name, symbol, or address)\n"
             "/top - Top 10 tokens right now\n"
             "/watchlist - Tokens on watch\n"
-            "/token <address> - Lookup a token\n"
+            "/token <address> - Lookup a tracked token\n"
             "/status - Agent health\n"
             "/stats - 24h statistics\n"
             "/market - Market context\n"
@@ -410,3 +415,158 @@ class TelegramAlertBot:
             lines.append(f"   {r.get('details', '')}")
 
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")  # type: ignore[union-attr]
+
+    async def _cmd_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Search for any token by name, symbol, or address and score it on-demand."""
+        args = context.args
+        if not args:
+            await update.message.reply_text(  # type: ignore[union-attr]
+                "Usage: /search <query>\n\n"
+                "Examples:\n"
+                "  /search PEPE\n"
+                "  /search dogwifhat\n"
+                "  /search 0x6982508...\n"
+                "  /search HbTd4Cv9..."
+            )
+            return
+
+        query = " ".join(args)
+        await update.message.reply_text(f"Searching for '{query}'...")  # type: ignore[union-attr]
+
+        if not self.scanner or not self.scanner.session:
+            await update.message.reply_text("Scanner not ready yet.")  # type: ignore[union-attr]
+            return
+
+        try:
+            import aiohttp
+            # Search DEXScreener
+            url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
+            async with self.scanner.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    await update.message.reply_text(f"DEXScreener search failed (HTTP {resp.status})")  # type: ignore[union-attr]
+                    return
+                data = await resp.json()
+
+            pairs = data.get("pairs", [])
+            if not pairs:
+                await update.message.reply_text(f"No results found for '{query}'")  # type: ignore[union-attr]
+                return
+
+            # Show top 5 results
+            lines = [f"Search results for '{query}':\n"]
+            shown = 0
+            seen_tokens: set[str] = set()
+
+            for pair in pairs[:20]:
+                base = pair.get("baseToken", {})
+                addr = base.get("address", "")
+                symbol = base.get("symbol", "")
+                chain = pair.get("chainId", "").lower()
+
+                key = f"{chain}:{addr}"
+                if key in seen_tokens:
+                    continue
+                seen_tokens.add(key)
+
+                if chain not in settings.ACTIVE_CHAINS:
+                    continue
+
+                name = base.get("name", "")
+                price = pair.get("priceUsd", "0")
+                liq = pair.get("liquidity", {}).get("usd", 0)
+                vol24 = pair.get("volume", {}).get("h24", 0)
+                mcap = pair.get("marketCap", 0) or pair.get("fdv", 0)
+                chg24 = pair.get("priceChange", {}).get("h24", 0)
+                pair_addr = pair.get("pairAddress", "")
+                dex = pair.get("dexId", "")
+
+                txns = pair.get("txns", {})
+                buys_h1 = int(txns.get("h1", {}).get("buys", 0) or 0)
+                sells_h1 = int(txns.get("h1", {}).get("sells", 0) or 0)
+                vol_h1 = float(pair.get("volume", {}).get("h1", 0) or 0)
+                vol_h6 = float(pair.get("volume", {}).get("h6", 0) or 0)
+
+                # Quick score this token
+                from models.token import MetricsSnapshot
+                metrics = MetricsSnapshot(
+                    contract_address=addr, chain=chain,
+                    price_usd=float(price or 0),
+                    volume_h1=vol_h1, volume_h6=vol_h6,
+                    volume_h24=float(vol24 or 0),
+                    liquidity_usd=float(liq or 0),
+                    market_cap=float(mcap or 0),
+                    buys_h1=buys_h1, sells_h1=sells_h1,
+                    price_change_h1=float(pair.get("priceChange", {}).get("h1", 0) or 0),
+                    price_change_h24=float(chg24 or 0),
+                )
+
+                vol_result = self.scanner.volume_analyzer.analyze(metrics)
+                vol_score = vol_result.get("volume_score", 0)
+
+                # Safety check
+                safety = None
+                safety_score = 50.0
+                if self.scanner.safety_analyzer:
+                    safety = await self.scanner.safety_analyzer.check_token(addr, chain)
+                    if safety:
+                        safety_score = safety.safety_score
+
+                # Save to DB
+                token_id = await self.db.upsert_token(
+                    contract_address=addr, chain=chain,
+                    token_name=name, token_symbol=symbol,
+                    pair_address=pair_addr, dex=dex,
+                )
+                await self.db.save_metrics(
+                    token_id=token_id, price_usd=metrics.price_usd,
+                    volume_h1=metrics.volume_h1, volume_h6=metrics.volume_h6,
+                    volume_h24=metrics.volume_h24, liquidity_usd=metrics.liquidity_usd,
+                    market_cap=metrics.market_cap, buys_h1=metrics.buys_h1,
+                    sells_h1=metrics.sells_h1, price_change_h1=metrics.price_change_h1,
+                    price_change_h24=metrics.price_change_h24,
+                )
+
+                # Quick composite
+                liq_score = min(float(liq or 0) / 50000 * 60, 100)
+                total_txns = buys_h1 + sells_h1
+                buy_pct = int(buys_h1 / total_txns * 100) if total_txns > 0 else 50
+                quick_score = (vol_score * 0.30 + safety_score * 0.25 + liq_score * 0.25 + 25 * 0.20)
+
+                await self.db.save_score(
+                    token_id=token_id, composite=quick_score,
+                    volume=vol_score, social=0, holder=0,
+                    safety=safety_score, liquidity=liq_score,
+                )
+
+                # Safety indicator
+                safe_str = ""
+                if safety and safety.is_honeypot:
+                    safe_str = " HONEYPOT"
+                elif safety and safety_score >= 80:
+                    safe_str = " Safe"
+                elif safety and safety_score < 40:
+                    safe_str = " Risky"
+
+                chg_str = f"+{chg24:.0f}%" if chg24 and chg24 >= 0 else f"{chg24:.0f}%" if chg24 else "N/A"
+
+                lines.append(
+                    f"{shown+1}. ${symbol} ({name[:20]}){safe_str}\n"
+                    f"   {chain.title()} | {dex}\n"
+                    f"   Price: ${float(price or 0):.8f} ({chg_str} 24h)\n"
+                    f"   Liq: ${format_number(float(liq or 0))} | Vol24h: ${format_number(float(vol24 or 0))}\n"
+                    f"   MCap: ${format_number(float(mcap or 0))}\n"
+                    f"   Buys/Sells 1h: {buys_h1}/{sells_h1} | Buy%: {buy_pct}%\n"
+                    f"   Score: {quick_score:.0f}/100 [vol={vol_score:.0f} safe={safety_score:.0f} liq={liq_score:.0f}]\n"
+                )
+                shown += 1
+                if shown >= 5:
+                    break
+
+            if shown == 0:
+                lines.append("No tokens found on supported chains.")
+
+            await update.message.reply_text("\n".join(lines))  # type: ignore[union-attr]
+
+        except Exception as exc:
+            logger.error("Search command error: %s", exc)
+            await update.message.reply_text(f"Search error: {exc}")  # type: ignore[union-attr]

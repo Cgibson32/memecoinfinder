@@ -164,6 +164,7 @@ class AlphaScanner:
 
         # Initialize Telegram bot
         self.bot = TelegramAlertBot(self.db, self.cache, dry_run=self.dry_run)
+        self.bot.scanner = self  # Give bot access for /search command
         await self.bot.initialize()
 
         # Start Telethon listener if configured
