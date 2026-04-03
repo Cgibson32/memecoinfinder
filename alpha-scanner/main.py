@@ -681,9 +681,10 @@ def main() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    # Graceful shutdown on signals
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.ensure_future(scanner.shutdown()))
+    # Graceful shutdown on signals (Unix only — Windows uses KeyboardInterrupt)
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda: asyncio.ensure_future(scanner.shutdown()))
 
     try:
         loop.run_until_complete(scanner.start())
