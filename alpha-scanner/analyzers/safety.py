@@ -73,15 +73,25 @@ class SafetyAnalyzer:
                     logger.warning("GoPlus returned %d for %s", resp.status, contract_address)
                     return None
                 data = await resp.json()
-                result = data.get("result", {})
+                if not data or not isinstance(data, dict):
+                    return None
+                result = data.get("result")
+                if not result or not isinstance(result, dict):
+                    return None
                 # GoPlus returns data keyed by lowercase address
-                token_data = result.get(contract_address.lower(), {})
+                token_data = result.get(contract_address.lower())
                 if not token_data:
                     # Try original case
-                    token_data = result.get(contract_address, {})
-                return token_data or None
+                    token_data = result.get(contract_address)
+                if not token_data:
+                    # Try first available key (some chains return different casing)
+                    for key, val in result.items():
+                        if isinstance(val, dict):
+                            token_data = val
+                            break
+                return token_data if isinstance(token_data, dict) else None
         except Exception as exc:
-            logger.warning("GoPlus API error: %s", exc)
+            logger.warning("GoPlus API error for %s on %s: %s", contract_address[:12], chain_id, exc)
             return None
 
     def _evaluate_safety(self, contract_address: str, chain: str, data: dict) -> SafetyResult:

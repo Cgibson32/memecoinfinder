@@ -71,6 +71,9 @@ class BaseCollector(ABC):
                         logger.warning("%s rate limited, waiting %ds", self.name, retry_after)
                         await asyncio.sleep(retry_after)
                         continue
+                    if resp.status == 404:
+                        # Not found is not retryable
+                        return None
                     resp.raise_for_status()
                     return await resp.json()
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
