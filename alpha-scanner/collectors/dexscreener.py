@@ -64,10 +64,9 @@ class DexScreenerCollector(BaseCollector):
                 chain_for_addr[info["contract_address"]] = info["chain"]
                 self._seen_addresses.add(key)
 
-        # DEXScreener /dex/tokens/ supports comma-separated addresses
-        # Keep batches small to avoid URL length limits
-        for i in range(0, len(addresses_to_fetch), 10):
-            batch = addresses_to_fetch[i : i + 10]
+        # DEXScreener /latest/dex/tokens/ supports up to 30 comma-separated addresses
+        for i in range(0, len(addresses_to_fetch), 30):
+            batch = addresses_to_fetch[i : i + 30]
             pair_data = await self._fetch_token_pairs(batch)
             if not pair_data:
                 continue
@@ -93,8 +92,8 @@ class DexScreenerCollector(BaseCollector):
 
     async def _fetch_token_pairs(self, addresses: list[str]) -> list[dict]:
         joined = ",".join(addresses)
-        # Try the v1 endpoint first, fall back to /dex/tokens/
-        data = await self.fetch_json(f"{BASE_URL}/dex/tokens/{joined}")
+        # Correct endpoint: /latest/dex/tokens/ (supports up to 30 addresses)
+        data = await self.fetch_json(f"{BASE_URL}/latest/dex/tokens/{joined}")
         if data and "pairs" in data and isinstance(data["pairs"], list):
             return data["pairs"]
         if isinstance(data, list):
@@ -103,7 +102,7 @@ class DexScreenerCollector(BaseCollector):
 
     async def fetch_pair(self, chain_id: str, pair_address: str) -> dict | None:
         """Fetch data for a specific pair (used by other modules)."""
-        data = await self.fetch_json(f"{BASE_URL}/dex/pairs/{chain_id}/{pair_address}")
+        data = await self.fetch_json(f"{BASE_URL}/latest/dex/pairs/{chain_id}/{pair_address}")
         if data and "pairs" in data and data["pairs"]:
             return self._parse_pair(data["pairs"][0])
         return None
