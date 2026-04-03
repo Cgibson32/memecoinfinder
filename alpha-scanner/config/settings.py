@@ -17,11 +17,13 @@ def _get(key: str, default: str = "") -> str:
 
 
 def _get_int(key: str, default: int = 0) -> int:
-    return int(os.getenv(key, str(default)))
+    val = os.getenv(key, "")
+    return int(val) if val.strip() else default
 
 
 def _get_float(key: str, default: float = 0.0) -> float:
-    return float(os.getenv(key, str(default)))
+    val = os.getenv(key, "")
+    return float(val) if val.strip() else default
 
 
 def _get_bool(key: str, default: bool = False) -> bool:
