@@ -255,9 +255,9 @@ class AlphaScanner:
                 if resp.status != 200:
                     logger.warning("DEXScreener API returned %d", resp.status)
                 else:
-                    logger.info("✓ DEXScreener API reachable")
+                    logger.info("[OK] DEXScreener API reachable")
         except Exception as exc:
-            logger.error("✗ DEXScreener API unreachable: %s", exc)
+            logger.error("[FAIL] DEXScreener API unreachable: %s", exc)
             if not self.dry_run:
                 ok = False
             else:
@@ -271,18 +271,18 @@ class AlphaScanner:
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status == 200:
-                    logger.info("✓ GoPlus API reachable")
+                    logger.info("[OK] GoPlus API reachable")
                 else:
                     logger.warning("GoPlus API returned %d (may still work)", resp.status)
         except Exception as exc:
-            logger.warning("✗ GoPlus API unreachable: %s — safety checks degraded", exc)
+            logger.warning("[FAIL] GoPlus API unreachable: %s -- safety checks degraded", exc)
 
         # Check SQLite
         try:
             await self.db.db.execute("SELECT 1")
-            logger.info("✓ SQLite database writable")
+            logger.info("[OK] SQLite database writable")
         except Exception as exc:
-            logger.error("✗ SQLite error: %s", exc)
+            logger.error("[FAIL] SQLite error: %s", exc)
             ok = False
 
         return ok
